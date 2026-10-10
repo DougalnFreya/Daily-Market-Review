@@ -4,8 +4,12 @@ Scripts for Phil's daily indicator monitor and monthly momentum ETF schedule.
 
 Only the scripts live here. Everything that changes from day to day stays in the engine
 artifact (https://claude.ai/artifact/LzQbtVpQmPcGyrJ62Wc5Jt, file `engine_bundle.txt`):
-history CSVs, `monitor_state.json`, `context_notes.json` and `momentum/` (prices,
-unemployment, `ETF schedule.xlsx`).
+history CSVs, `monitor_state.json`, `context_notes.json`, `ai_demand.json` and `momentum/`
+(prices, unemployment, `ETF schedule.xlsx`).
+
+`ai_demand.json` holds AI demand figures published only as web pages (a16z consumer data,
+Ramp token price and spend). The daily run adds each new release as a new observation and
+never edits old ones. Ramp business adoption comes automatically from FRED instead.
 
 ## How the daily run uses this repository
 

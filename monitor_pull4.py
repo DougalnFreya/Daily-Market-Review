@@ -127,6 +127,11 @@ FRED = {
     # rose and the dollar fell together (investors leaving US bonds and the currency at once).
     # Published weekly on Mondays, so the latest reading is a few days old.
     "us_dollar_broad":   "DTWEXBGS",
+    # added 10 October 2026: AI demand. Share of US businesses on Ramp paying for AI, from
+    # their card and bill spending (Ramp AI Index), monthly since 2023, carried by FRED.
+    "ramp_ai_all":       "RAMPAIALL",
+    "ramp_ai_anthropic": "RAMPAIANTHROPIC",
+    "ramp_ai_openai":    "RAMPAIOPENAI",
 }
 
 

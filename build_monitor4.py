@@ -1418,6 +1418,29 @@ def build_blocks(S, R):
                         last(prod), back(prod, 4), lo, hi, "idx",
                         band(last(prod), lo, hi, invert=True), "20 years"),
                     trend(prod, False, "pct", obs=True)))
+    # ---- AI demand (added 10 October 2026): how many pay, and how much. Penetration and
+    # monetisation are what the build-out has to grow into; the rate of change matters more
+    # than the level, so these carry no state chip.
+    for key, nm, sub in (
+            ("ramp_ai_all", "Businesses paying for AI",
+             "Share of US businesses on Ramp paying for any AI tool, from card and bill payments "
+             "&middot; Ramp AI Index via FRED, monthly &middot; penetration of business demand"),
+            ("ramp_ai_anthropic", "Businesses paying Anthropic",
+             "Share of US businesses on Ramp paying Anthropic (Claude) &middot; Ramp AI Index via "
+             "FRED, monthly"),
+            ("ramp_ai_openai", "Businesses paying OpenAI",
+             "Share of US businesses on Ramp paying OpenAI &middot; Ramp AI Index via FRED, "
+             "monthly")):
+        ser = g(key, [])
+        if ser:
+            lo, hi = rng(ser)
+            ai.append(T(row(nm, sub, round(last(ser), 2), round(back(ser, 12), 2) if len(ser) > 12 else None,
+                            round(lo, 2), round(hi, 2), "%", "none", "since %s" % ser[0][0][:4]),
+                        trend(ser, False, "pp", obs=True)))
+            ai[-1]["norange"] = ("Adoption rising is the build-out working. The warning is the "
+                                 "monthly gain shrinking or turning negative: watch the change, "
+                                 "not the level.")
+            ai[-1]["demand"] = True
     for key, nm, sub in (
             ("us_bbb_yield", "BBB borrowing cost",
              "ICE BofA BBB effective yield &middot; Oracle&rsquo;s credit tier, not Oracle itself "
@@ -1463,6 +1486,74 @@ def build_blocks(S, R):
     assert len(placed) == len(set(id(r) for r in placed)), "a row was placed twice"
     missing = [r["n"] for r in pool if not any(r is p for p in placed)]
     assert not missing, "rows lost in assembly: %s" % missing
+    return out
+
+
+# --------------------------------------------------------------- AI demand, typed in
+# Figures published only as web pages (a16z consumer data, Ramp prices and spend). Each new
+# release is added to ai_demand.json by the daily run as a new observation; the page shows the
+# latest, the change on the previous release and the change on a year earlier.
+
+AI_DEMAND_FILE = "ai_demand.json"
+DEMAND_NOTES = []
+
+
+def _ym(p):
+    try:
+        y, m = p.split("-")[:2]
+        return int(y), int(m)
+    except Exception:
+        return None
+
+
+def demand_rows(d, pulled):
+    p = os.path.join(d, AI_DEMAND_FILE)
+    if not os.path.exists(p):
+        DEMAND_NOTES.append(("AI demand figures on file", "warn", "no ai_demand.json"))
+        return []
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        DEMAND_NOTES.append(("AI demand figures on file", "warn", f"ai_demand.json unreadable: {e}"))
+        return []
+    out, stale = [], []
+    for sr in data.get("series") or []:
+        obs = sorted([o for o in sr.get("obs") or [] if o.get("value") is not None],
+                     key=lambda o: o.get("period", ""))
+        if not obs:
+            out.append(na_row(sr["name"], sr.get("sub", ""), "no release recorded yet"))
+            continue
+        lt, prev = obs[-1], (obs[-2] if len(obs) > 1 else None)
+        mode = sr.get("change", "pct")
+
+        def chg(a, b):
+            if a is None or b is None:
+                return None
+            return round(a - b, 2) if mode == "pp" else (round((a / b - 1) * 100, 1) if b else None)
+        ym = _ym(lt["period"])
+        yago = None
+        if ym:
+            want = f"{ym[0] - 1:04d}-{ym[1]:02d}"
+            yago = next((o for o in obs if o["period"] == want), None)
+        src = f"typed in from {lt.get('source', 'source not named')}"
+        r = row(sr["name"], sr.get("sub", "") + " &middot; " + src, lt["value"],
+                yago["value"] if yago else None, None, None, sr.get("unit", ""), "none", "no range")
+        r["norange"] = ("Typed in from each release; too few readings for a range. The change "
+                        "between releases is the signal.")
+        r["demand"] = True
+        r["dem"] = {"latest": lt, "prev": prev, "yago": yago, "mode": mode,
+                    "chg_prev": chg(lt["value"], prev["value"]) if prev else None,
+                    "chg_12m": chg(lt["value"], yago["value"]) if yago else None,
+                    "n": len(obs), "first": obs[0]["period"]}
+        if ym:
+            age = (pulled - datetime(ym[0], ym[1], 1).date()).days
+            if age > sr.get("max_age_days", 120):
+                stale.append(f"{sr['name']}: latest release covers {lt['period']}")
+        out.append(r)
+    DEMAND_NOTES.append(("AI demand figures are recent", "warn" if stale else True,
+                         "; ".join(stale) + " - check for a newer release" if stale else
+                         f"{len(out)} typed-in series, each within its release cycle"))
     return out
 
 
@@ -1606,6 +1697,16 @@ def digest_row(r, block):
                        L.get("alab", "a"): _r(L.get("a")), L.get("blab", "b"): _r(L.get("b"))}
     if r.get("short"):
         out["short_history"] = r["short"]
+    if r.get("dem"):
+        dm = r["dem"]
+        out["releases"] = [{"period": o.get("period"), "value": o.get("value"),
+                            "source": o.get("source"), "stated": o.get("stated")}
+                           for o in ([dm["prev"]] if dm["prev"] else []) + [dm["latest"]]]
+        out["change_on_previous_release"] = dm["chg_prev"]
+        out["change_on_year_earlier"] = dm["chg_12m"]
+        out["change_mode"] = "percentage points" if dm["mode"] == "pp" else "percent"
+        if dm["yago"]:
+            out["year_earlier_release"] = {"period": dm["yago"]["period"], "value": dm["yago"]["value"]}
     return out
 
 
@@ -1877,9 +1978,16 @@ MAX_AGE = {  # days between the pull and the latest reading
     "Market breadth": 5, "Sterling against the dollar": 5,
     "p-gulf": 7, "p-debt": 7, "p-ai": 7, "p-trans": 7,
     "p-fold-detail": 7, "p-fold-market": 7,
-    "US term premium": 21, "UK unemployment rate": 130, "UK employment rate": 130,
-    "UK vacancies": 100, "US unemployment rate": 60, "US Sahm recession gauge": 60,
+    # ONS dates each three-month window by its middle month (May-July shows as June) and
+    # publishes roughly monthly; the gap between releases is sometimes five weeks (15 September
+    # to 20 October 2026), when the newest reading reaches about 140 days. Raised 10 October
+    # 2026 from 130 and 100, which failed in the week before a release.
+    "US term premium": 21, "UK unemployment rate": 145, "UK employment rate": 145,
+    "UK vacancies": 115, "US unemployment rate": 60, "US Sahm recession gauge": 60,
     "US initial jobless claims": 14,
+    # Ramp AI Index: monthly, dated the first of the month, published about five to six weeks
+    # after the month ends, so the newest reading is normally 40 to 75 days old
+    "Businesses paying for AI": 80, "Businesses paying Anthropic": 80, "Businesses paying OpenAI": 80,
 }
 
 
@@ -2122,6 +2230,11 @@ def main():
     WARN = build_warn(payload["series"])
     R = {"p-brief": brief, **R}
     R = build_blocks(payload["series"], R)
+    _pulled = datetime.fromisoformat(payload["generated"]).date()
+    _drows = demand_rows(d, _pulled)
+    _ai = R.get("p-ai", [])
+    _at = max([i for i, r in enumerate(_ai) if r.get("demand")], default=len(_ai) - 1) + 1
+    R["p-ai"] = _ai[:_at] + _drows + _ai[_at:]
     FUNDS = build_funds(payload["series"].get("funds"))
     SCHED, sched_checks = build_schedule(d)
     STANDING = build_standing(d, R, payload)
@@ -2130,6 +2243,7 @@ def main():
     READINGS, rd_checks = build_readings(d, DIGEST)
     CHECKS = run_checks(payload, R, FUNDS, SCHED, sched_checks)
     CHECKS += [{"name": n, "ok": ok, "detail": det} for n, ok, det in rd_checks]
+    CHECKS += [{"name": n, "ok": ok, "detail": det} for n, ok, det in DEMAND_NOTES]
     html = render(R, FUNDS, SCHED, CHECKS, payload, os.path.join(d, TEMPLATE))
     html = html.replace("const SPLIT = null;", "const SPLIT = " + json.dumps(SPLIT, separators=(",", ":")) + ";", 1)
     html = html.replace("const WARN = null;", "const WARN = " + json.dumps(WARN, separators=(",", ":")) + ";", 1)

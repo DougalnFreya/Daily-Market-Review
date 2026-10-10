@@ -480,6 +480,8 @@ function fmt(x,u){
   if(u==="GWh")     return x.toLocaleString("en-GB",{maximumFractionDigits:0})+" GWh";
   if(u==="GWh/d")   return x.toLocaleString("en-GB",{maximumFractionDigits:0})+" GWh/d";
   if(u==="of20")    return x.toFixed(0)+" of 20 days";
+  if(u==="$/mo")    return "$"+(x>=100?x.toFixed(0):x.toFixed(2).replace(/\.00$/,""))+" a month";
+  if(u==="$/Mtok")  return "$"+x.toFixed(2)+" per million";
   return a>=1000? x.toLocaleString("en-GB",{maximumFractionDigits:0}) : a>=100? x.toFixed(1) : x.toFixed(2);
 }
 const sgn=x=>x>0?"+":x<0?"−":"";
@@ -600,7 +602,16 @@ for(const [id,rows] of Object.entries(DATA)){
     const bv = x => priceTrace ? (Math.abs(x)>=1000? x.toLocaleString("en-GB",{maximumFractionDigits:0}) : x.toFixed(2)) : fmt(x, r.u==="pp"?"ppl":r.u);
     const base = b => b ? ' from '+bv(b[1])+' on '+dfmt(b[0]) : ' (no reading that far back)';
     const building = r.short && (new Date(r.short.last[0]) - new Date(r.short.first[0]))/864e5 < 100;
-    const dirCell = building
+    const ymf = p => /^\d{4}-\d{2}$/.test(p||'') ? dfmt(p) : (p||'');
+    const demchg = (x,md) => x==null ? '–' : (md==="pp" ? fchg(x,"pp") : fchg(x,"pct"));
+    const demCell = D =>
+      '<div class="dirnote">Latest release covers '+ymf(D.latest.period)+
+        (D.latest.url?' &middot; <a href="'+D.latest.url+'" target="_blank" rel="noopener">source</a>':'')+'</div>'+
+      (D.prev && !(D.yago && D.yago.period===D.prev.period)? '<div class="dirnote">On the previous release ('+ymf(D.prev.period)+'): '+demchg(D.chg_prev,D.mode)+'</div>' : '')+
+      (D.yago? '<div class="dirnote">On a year earlier ('+ymf(D.yago.period)+'): '+demchg(D.chg_12m,D.mode)+'</div>' : '')+
+      (D.latest.stated? '<div class="dirnote">Source says: '+D.latest.stated+'</div>' : '')+
+      '<div class="dirnote">'+D.n+' release'+(D.n===1?'':'s')+' on file since '+ymf(D.first)+'. Typed in by the daily run from each new release.</div>';
+    const dirCell = r.dem ? demCell(r.dem) : building
       ? (r.tr?spark(r.tr):'')+'<div class="dirchg">Since '+dfmt(r.short.first[0])+': '+(r.short.chg==null?'–':(r.short.chg>0?'+':r.short.chg<0?'−':'')+Math.abs(r.short.chg).toFixed(1)+'%')+'</div>'+
         '<div class="dirnote">'+r.short.n+' reading'+(r.short.n===1?'':'s')+' so far. '+r.short.note+'</div>'
       : r.tr
