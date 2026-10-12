@@ -172,8 +172,8 @@ def main():
         w = csv.writer(f, lineterminator="\n"); w.writerow(uh)
         for mo in sorted(uold):
             w.writerow(uold[mo])
-    res = subprocess.run([sys.executable, "momentum_schedule.py", "prices.csv", "unemployment.csv",
-                          "ETF schedule.xlsx"], cwd=MDIR, capture_output=True, text=True)
+    res = subprocess.run([sys.executable, os.path.join(HERE, "momentum", "momentum_schedule.py"),
+                          "prices.csv", "unemployment.csv", "ETF schedule.xlsx"], cwd=MDIR, capture_output=True, text=True)
     if res.returncode != 0 or f"Schedule for {cur}" not in res.stdout:
         for fn in ("prices.csv", "unemployment.csv", "ETF schedule.xlsx"):
             shutil.copy2(os.path.join(MDIR, fn + ".before"), os.path.join(MDIR, fn))

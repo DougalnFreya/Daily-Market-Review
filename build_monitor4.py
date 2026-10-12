@@ -2156,7 +2156,7 @@ def run_checks(payload, R, FUNDS, SCHED, sched_checks):
         "; ".join(bad_legs) if bad_legs else
         f"{len(legged)} spreads checked: " + ", ".join(legged))
 
-    ctx = build_context(os.path.dirname(os.path.abspath(__file__)))
+    ctx = build_context(DATA_DIR)
     newest = max((c.get("date", "") for c in ctx), default="")
     cage = (pulled - _d(newest)).days if newest else None
     add("Context notes are present and recent", bool(ctx) and cage is not None and cage <= 14,
@@ -2178,6 +2178,8 @@ def run_checks(payload, R, FUNDS, SCHED, sched_checks):
 # --------------------------------------------------------------- page
 
 TEMPLATE = "dashboard_template4.html"
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))   # scripts and template (the repository)
+DATA_DIR = CODE_DIR                                     # history and state; set from argv in main()
 
 
 def fill_manual(html, generated):
@@ -2219,7 +2221,9 @@ def render(R, FUNDS, SCHED, CHECKS, payload, template_path):
 
 
 def main():
-    d = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+    global DATA_DIR
+    d = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else CODE_DIR
+    DATA_DIR = d
     with open(os.path.join(d, "monitor_data.json"), encoding="utf-8") as f:
         payload = json.load(f)
     R = build_rows(payload["series"])
@@ -2244,7 +2248,7 @@ def main():
     CHECKS = run_checks(payload, R, FUNDS, SCHED, sched_checks)
     CHECKS += [{"name": n, "ok": ok, "detail": det} for n, ok, det in rd_checks]
     CHECKS += [{"name": n, "ok": ok, "detail": det} for n, ok, det in DEMAND_NOTES]
-    html = render(R, FUNDS, SCHED, CHECKS, payload, os.path.join(d, TEMPLATE))
+    html = render(R, FUNDS, SCHED, CHECKS, payload, os.path.join(CODE_DIR, TEMPLATE))
     html = html.replace("const SPLIT = null;", "const SPLIT = " + json.dumps(SPLIT, separators=(",", ":")) + ";", 1)
     html = html.replace("const WARN = null;", "const WARN = " + json.dumps(WARN, separators=(",", ":")) + ";", 1)
     html = html.replace("const STANDING = null;", "const STANDING = " + json.dumps(STANDING, separators=(",", ":")) + ";", 1)

@@ -13,12 +13,16 @@ never edits old ones. Ramp business adoption comes automatically from FRED inste
 
 ## How the daily run uses this repository
 
-1. Unpack `engine_bundle.txt` from the engine artifact into a working folder (state).
-2. Copy this repository's scripts over it, so the code always comes from here.
-3. Run `run_all.py`, research and write the reading, rebuild with `build_monitor4.py`.
-4. `pack.py`, then save the bundle back to the engine artifact and publish the page.
+Code and data are kept apart, so nothing unpacked from the artifact is ever run.
 
-Change the scripts here, not in the bundle: the run overwrites the bundle's copies with these.
+1. Clone this repository (attached to the session) and unpack `engine_bundle.txt` into a
+   separate data folder. The bundle holds data only; any `.py` file found in it is deleted.
+2. `python3 <repo>/run_all.py <data>`: pull, monthly schedule, build and checks. The scripts run
+   from the repository and read and write the data folder.
+3. Research and write the reading, then rebuild with `python3 <repo>/build_monitor4.py <data>`.
+4. `python3 <repo>/pack.py <data>`, save the bundle back to the engine artifact, publish the page.
+
+Change the scripts here, not in the bundle.
 
 | File | Job |
 |---|---|
@@ -28,4 +32,4 @@ Change the scripts here, not in the bundle: the run overwrites the bundle's copi
 | dashboard_template4.html | Page template |
 | momentum_monthly.py | Produces the monthly ETF schedule when one is due |
 | momentum/momentum_schedule.py | Momentum rules |
-| pack.py | Packs state and scripts into engine_bundle.txt |
+| pack.py | Packs history and state (never code) into engine_bundle.txt |
