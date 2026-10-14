@@ -406,7 +406,7 @@
     <div class="note">
       <h3>The 5.25% line, and why the split matters more</h3>
       <p>Above roughly 5.25%, shares and government bonds have historically stopped cushioning each other and started falling together. That is an observed pattern, not a cause. The usual explanation is that bonds stop hedging when <em>inflation</em> becomes the dominant shock, so the yield level is a symptom rather than a trigger.</p>
-      <p>That makes the split worth watching as well as the total. A rise in yields can come from the real yield and term premium (the cost of money) or from expected inflation. Both halves are in the tables above, for the US under Financial stress and for the UK under UK rates, with their three-month changes.</p>
+      <p>That makes the split worth watching as well as the total. A rise in yields can come from the real yield and term premium (the cost of money) or from expected inflation. Both halves are shown in "What is moving UK and US yields" above: for the UK in the government debt block, for the US in the fold at the end, with their three-month changes.</p>
       <p>UK implied inflation is measured against RPI, which has historically run about a percentage point above CPI, so its level is not comparable with the American figure. The change over time is.</p>
     </div>
     <div class="note">
@@ -419,18 +419,17 @@
     <div class="note">
       <h3>Still not wired in</h3>
       <ul>
-        <li>Baltic Clean Tanker Index — licensed</li>
-        <li>NBP gas front month — licensed</li>
-        <li>Drewry container rates, route level — subscription</li>
+        <li>Strait of Hormuz transits &mdash; no daily public series found yet</li>
         <li>Cloud GPU rental rates — no clean public feed found</li>
         <li>UK gilt auction cover and tail &mdash; the DMO report resists automated export</li>
         <li>Return-side AI figures &mdash; no clean feed exists</li>
         <li>Backlog and capex figures are typed in by hand each quarter</li>
+        <li>Wage growth, UK and US &mdash; not yet added</li>
       </ul>
     </div>
     <div class="note">
       <h3>What the proxies actually are</h3>
-      <p>Tanker charter rates are stood in for by two tanker owners' share prices. Credit spreads are stood in for by a high-yield bond fund against an investment-grade one. AI contract risk is stood in for by the share prices of the two most exposed names. UK gilts, Bank Rate, UK power and both labour series are the real thing.</p>
+      <p>Tanker costs are the Baltic Exchange tanker indices, rebuilt from shipbroker reports before the daily ticker; the VLCC route rate itself is licensed only. Credit spreads are stood in for by a high-yield bond fund against an investment-grade one. AI contract risk is stood in for by the share prices of the most exposed names. UK gilts, Bank Rate, UK power, consumer price inflation (UK and US) and the labour series are the real thing.</p>
     </div>
     <div class="note">
       <h3>What this cannot do</h3>
@@ -480,6 +479,8 @@ function fmt(x,u){
   if(u==="GWh")     return x.toLocaleString("en-GB",{maximumFractionDigits:0})+" GWh";
   if(u==="GWh/d")   return x.toLocaleString("en-GB",{maximumFractionDigits:0})+" GWh/d";
   if(u==="of20")    return x.toFixed(0)+" of 20 days";
+  if(u==="$/mo")    return "$"+(x>=100?x.toFixed(0):x.toFixed(2).replace(/\.00$/,""))+" a month";
+  if(u==="$/Mtok")  return "$"+x.toFixed(2)+" per million";
   return a>=1000? x.toLocaleString("en-GB",{maximumFractionDigits:0}) : a>=100? x.toFixed(1) : x.toFixed(2);
 }
 const sgn=x=>x>0?"+":x<0?"−":"";
@@ -600,7 +601,16 @@ for(const [id,rows] of Object.entries(DATA)){
     const bv = x => priceTrace ? (Math.abs(x)>=1000? x.toLocaleString("en-GB",{maximumFractionDigits:0}) : x.toFixed(2)) : fmt(x, r.u==="pp"?"ppl":r.u);
     const base = b => b ? ' from '+bv(b[1])+' on '+dfmt(b[0]) : ' (no reading that far back)';
     const building = r.short && (new Date(r.short.last[0]) - new Date(r.short.first[0]))/864e5 < 100;
-    const dirCell = building
+    const ymf = p => /^\d{4}-\d{2}$/.test(p||'') ? dfmt(p) : (p||'');
+    const demchg = (x,md) => x==null ? '–' : (md==="pp" ? fchg(x,"pp") : fchg(x,"pct"));
+    const demCell = D =>
+      '<div class="dirnote">Latest release covers '+ymf(D.latest.period)+
+        (D.latest.url?' &middot; <a href="'+D.latest.url+'" target="_blank" rel="noopener">source</a>':'')+'</div>'+
+      (D.prev && !(D.yago && D.yago.period===D.prev.period)? '<div class="dirnote">On the previous release ('+ymf(D.prev.period)+'): '+demchg(D.chg_prev,D.mode)+'</div>' : '')+
+      (D.yago? '<div class="dirnote">On a year earlier ('+ymf(D.yago.period)+'): '+demchg(D.chg_12m,D.mode)+'</div>' : '')+
+      (D.latest.stated? '<div class="dirnote">Source says: '+D.latest.stated+'</div>' : '')+
+      '<div class="dirnote">'+D.n+' release'+(D.n===1?'':'s')+' on file since '+ymf(D.first)+'. Typed in by the daily run from each new release.</div>';
+    const dirCell = r.dem ? demCell(r.dem) : building
       ? (r.tr?spark(r.tr):'')+'<div class="dirchg">Since '+dfmt(r.short.first[0])+': '+(r.short.chg==null?'–':(r.short.chg>0?'+':r.short.chg<0?'−':'')+Math.abs(r.short.chg).toFixed(1)+'%')+'</div>'+
         '<div class="dirnote">'+r.short.n+' reading'+(r.short.n===1?'':'s')+' so far. '+r.short.note+'</div>'
       : r.tr

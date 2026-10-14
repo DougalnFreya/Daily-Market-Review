@@ -127,17 +127,31 @@ FRED = {
     # rose and the dollar fell together (investors leaving US bonds and the currency at once).
     # Published weekly on Mondays, so the latest reading is a few days old.
     "us_dollar_broad":   "DTWEXBGS",
+    # added 10 October 2026: AI demand. Share of US businesses on Ramp paying for AI, from
+    # their card and bill spending (Ramp AI Index), monthly since 2023, carried by FRED.
+    "ramp_ai_all":       "RAMPAIALL",
+    "ramp_ai_anthropic": "RAMPAIANTHROPIC",
+    "ramp_ai_openai":    "RAMPAIOPENAI",
+    # added 14 October 2026: actual inflation, not only what markets expect. Pulled as the
+    # change on a year earlier (FRED's pc1 transformation), as the headline figure is reported.
+    # The Fed's upper target lets the build see a rate decision the day it happens.
+    "us_cpi_yoy":        ("CPIAUCSL", "pc1"),
+    "us_core_cpi_yoy":   ("CPILFESL", "pc1"),
+    "us_fed_upper":      "DFEDTARU",
 }
 
 
 def pull_fred(series):
     """FRED. With FRED_API_KEY set (the cloud run), uses the FRED API, because FRED refuses
     cloud servers on its graph download. Without it (the laptop), uses the graph CSV, which
-    needs no key. Missing values are '.' and are dropped either way."""
+    needs no key. Missing values are '.' and are dropped either way.
+    series is a FRED id, or (id, units) for a transformation such as 'pc1' (change on a
+    year earlier, in percent)."""
+    series, units = series if isinstance(series, tuple) else (series, None)
     key = os.environ.get("FRED_API_KEY")
     if key:
         url = (f"https://api.stlouisfed.org/fred/series/observations?series_id={series}"
-               f"&api_key={key}&file_type=json&limit=100000")
+               f"&api_key={key}&file_type=json&limit=100000" + (f"&units={units}" if units else ""))
         out = []
         for o in get(url, as_json=True).get("observations", []):
             if o.get("value") in (None, "", "."):
@@ -147,7 +161,8 @@ def pull_fred(series):
             except ValueError:
                 continue
         return out
-    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}"
+    url = f"https://fred.stlouisfed.org/graph/fredgraph.csv?id={series}" + (
+        f"&transformation={units}" if units else "")
     out = []
     for row in csv.reader(get(url).strip().splitlines()[1:]):
         if len(row) < 2 or row[1].strip() in ("", "."):
@@ -215,12 +230,15 @@ ONS = {
     "uk_unemployment": ("employmentandlabourmarket/peoplenotinwork/unemployment", "mgsx"),
     "uk_employment":   ("employmentandlabourmarket/peopleinwork/employmentandemployeetypes", "lf24"),
     "uk_vacancies":    ("employmentandlabourmarket/peopleinwork/employmentandemployeetypes", "ap2y"),
+    # added 14 October 2026: UK consumer price inflation, annual rates, from the MM23 dataset
+    "uk_cpi":          ("economy/inflationandpriceindices", "d7g7", "mm23"),
+    "uk_services_cpi": ("economy/inflationandpriceindices", "d7nn", "mm23"),
 }
 
 
-def pull_ons(path, code):
+def pull_ons(path, code, dataset="lms"):
     """ONS time series JSON. Monthly values, returned as [['YYYY-MM', value], ...]."""
-    url = f"https://www.ons.gov.uk/{path}/timeseries/{code}/lms/data"
+    url = f"https://www.ons.gov.uk/{path}/timeseries/{code}/{dataset}/data"
     out = []
     for m in get(url, as_json=True).get("months", []):
         try:
@@ -285,6 +303,11 @@ YAHOO = {
     "ttf": "TTF=F",   # Dutch TTF gas, EUR/MWh - kept as a cross-check on NBP
     "eurusd": "EURUSD=X",  # converts TTF for that cross-check
 }
+
+
+# added 14 October 2026: same-day US Treasury yields (CBOE indices), used only to carry the
+# FRED daily series forward past FRED's one- to two-day publication lag. Daily only.
+YAHOO_SAME_DAY = {"us_treasury_10y_live": "^TNX", "us_treasury_30y_live": "^TYX"}
 
 
 def pull_yahoo(ticker, rng="5y", interval="1d", period=None):
@@ -512,8 +535,9 @@ def main():
     jobs = []
     jobs += [(f"boe:{k}", k, lambda s=s: pull_boe(s)) for k, s in BOE.items()]
     jobs += [(f"fred:{k}", k, lambda s=s: pull_fred(s)) for k, s in FRED.items()]
-    jobs += [(f"ons:{k}", k, lambda p=p, c=c: pull_ons(p, c)) for k, (p, c) in ONS.items()]
+    jobs += [(f"ons:{k}", k, lambda a=a: pull_ons(*a)) for k, a in ONS.items()]
     jobs += [(f"yahoo:{k}", k, lambda t=t: pull_yahoo(t)) for k, t in YAHOO.items()]
+    jobs += [(f"yahoo:{k}", k, lambda t=t: pull_yahoo(t, rng="3mo")) for k, t in YAHOO_SAME_DAY.items()]
     # Month-end closes over the full history, so the page can show where today sits in a
     # twenty-year range. The daily pull above only goes back five years.
     jobs += [(f"yahoo:{k}:monthly", f"{k}_monthly",

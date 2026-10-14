@@ -539,6 +539,28 @@ def build_rows(S):
           trend(sahm, True, "pp", 1.2 - sahm_lo)),
     ]
 
+    # ---- inflation (added 14 October 2026) --------------------------------
+    # Actual consumer price inflation, change on a year earlier. Until now the page carried
+    # only what markets expect (breakevens), so a hot release could not show in the figures.
+    def infl_row(name, sub, k, src):
+        s = g(k, [])
+        if len(s) < 13:
+            return na_row(name, sub, "no readings")
+        lo, hi = rng(s[-120:])
+        return T(row(name, f"{sub} &middot; {src}, latest {s[-1][0][:7]}", round(last(s), 2),
+                     round(back(s, 12), 2), round(lo, 2), round(hi, 2), "%",
+                     band(last(s), lo, hi), "10 years"),
+                 trend([[d, round(v, 2)] for d, v in s], True, "pp", span_of(lo, hi)))
+
+    R["p-infl"] = [
+        infl_row("US inflation (CPI)", "Consumer prices, change on a year earlier", "us_cpi_yoy", "BLS via FRED"),
+        infl_row("US core inflation", "Excluding food and energy, change on a year earlier",
+                 "us_core_cpi_yoy", "BLS via FRED"),
+        infl_row("UK inflation (CPI)", "Consumer prices, change on a year earlier", "uk_cpi", "ONS"),
+        infl_row("UK services inflation", "The part the Bank of England watches most closely",
+                 "uk_services_cpi", "ONS"),
+    ]
+
     # ---- UK power -------------------------------------------------------
     power = g("uk_power", {})
     months = sorted(power)
@@ -1219,7 +1241,8 @@ DEBT = ["UK gilt auction cover", "US auctions, last month: overseas-type share",
         "US auctions, last month: dealer share", "US yields up, dollar down",
         "US 10-year auction cover", "US 10-year dealer share",
         "UK 10-year gilt yield", "20-year gilt yield", "UK 10-year real yield",
-        "UK 10-year expected inflation", "US 10-year yield", "US 30-year yield"]
+        "UK 10-year expected inflation", "US 10-year yield", "US 30-year yield",
+        "US inflation (CPI)", "US core inflation", "UK inflation (CPI)", "UK services inflation"]
 TRANS = ["High yield vs investment grade", "Equity volatility", "Market breadth", "Gold",
          "US unemployment rate", "US Sahm recession gauge", "US initial jobless claims"]
 AI_BLOCK = ["Oracle backlog to revenue"]
@@ -1418,6 +1441,29 @@ def build_blocks(S, R):
                         last(prod), back(prod, 4), lo, hi, "idx",
                         band(last(prod), lo, hi, invert=True), "20 years"),
                     trend(prod, False, "pct", obs=True)))
+    # ---- AI demand (added 10 October 2026): how many pay, and how much. Penetration and
+    # monetisation are what the build-out has to grow into; the rate of change matters more
+    # than the level, so these carry no state chip.
+    for key, nm, sub in (
+            ("ramp_ai_all", "Businesses paying for AI",
+             "Share of US businesses on Ramp paying for any AI tool, from card and bill payments "
+             "&middot; Ramp AI Index via FRED, monthly &middot; penetration of business demand"),
+            ("ramp_ai_anthropic", "Businesses paying Anthropic",
+             "Share of US businesses on Ramp paying Anthropic (Claude) &middot; Ramp AI Index via "
+             "FRED, monthly"),
+            ("ramp_ai_openai", "Businesses paying OpenAI",
+             "Share of US businesses on Ramp paying OpenAI &middot; Ramp AI Index via FRED, "
+             "monthly")):
+        ser = g(key, [])
+        if ser:
+            lo, hi = rng(ser)
+            ai.append(T(row(nm, sub, round(last(ser), 2), round(back(ser, 12), 2) if len(ser) > 12 else None,
+                            round(lo, 2), round(hi, 2), "%", "none", "since %s" % ser[0][0][:4]),
+                        trend(ser, False, "pp", obs=True)))
+            ai[-1]["norange"] = ("Adoption rising is the build-out working. The warning is the "
+                                 "monthly gain shrinking or turning negative: watch the change, "
+                                 "not the level.")
+            ai[-1]["demand"] = True
     for key, nm, sub in (
             ("us_bbb_yield", "BBB borrowing cost",
              "ICE BofA BBB effective yield &middot; Oracle&rsquo;s credit tier, not Oracle itself "
@@ -1466,6 +1512,74 @@ def build_blocks(S, R):
     return out
 
 
+# --------------------------------------------------------------- AI demand, typed in
+# Figures published only as web pages (a16z consumer data, Ramp prices and spend). Each new
+# release is added to ai_demand.json by the daily run as a new observation; the page shows the
+# latest, the change on the previous release and the change on a year earlier.
+
+AI_DEMAND_FILE = "ai_demand.json"
+DEMAND_NOTES = []
+
+
+def _ym(p):
+    try:
+        y, m = p.split("-")[:2]
+        return int(y), int(m)
+    except Exception:
+        return None
+
+
+def demand_rows(d, pulled):
+    p = os.path.join(d, AI_DEMAND_FILE)
+    if not os.path.exists(p):
+        DEMAND_NOTES.append(("AI demand figures on file", "warn", "no ai_demand.json"))
+        return []
+    try:
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        DEMAND_NOTES.append(("AI demand figures on file", "warn", f"ai_demand.json unreadable: {e}"))
+        return []
+    out, stale = [], []
+    for sr in data.get("series") or []:
+        obs = sorted([o for o in sr.get("obs") or [] if o.get("value") is not None],
+                     key=lambda o: o.get("period", ""))
+        if not obs:
+            out.append(na_row(sr["name"], sr.get("sub", ""), "no release recorded yet"))
+            continue
+        lt, prev = obs[-1], (obs[-2] if len(obs) > 1 else None)
+        mode = sr.get("change", "pct")
+
+        def chg(a, b):
+            if a is None or b is None:
+                return None
+            return round(a - b, 2) if mode == "pp" else (round((a / b - 1) * 100, 1) if b else None)
+        ym = _ym(lt["period"])
+        yago = None
+        if ym:
+            want = f"{ym[0] - 1:04d}-{ym[1]:02d}"
+            yago = next((o for o in obs if o["period"] == want), None)
+        src = f"typed in from {lt.get('source', 'source not named')}"
+        r = row(sr["name"], sr.get("sub", "") + " &middot; " + src, lt["value"],
+                yago["value"] if yago else None, None, None, sr.get("unit", ""), "none", "no range")
+        r["norange"] = ("Typed in from each release; too few readings for a range. The change "
+                        "between releases is the signal.")
+        r["demand"] = True
+        r["dem"] = {"latest": lt, "prev": prev, "yago": yago, "mode": mode,
+                    "chg_prev": chg(lt["value"], prev["value"]) if prev else None,
+                    "chg_12m": chg(lt["value"], yago["value"]) if yago else None,
+                    "n": len(obs), "first": obs[0]["period"]}
+        if ym:
+            age = (pulled - datetime(ym[0], ym[1], 1).date()).days
+            if age > sr.get("max_age_days", 120):
+                stale.append(f"{sr['name']}: latest release covers {lt['period']}")
+        out.append(r)
+    DEMAND_NOTES.append(("AI demand figures are recent", "warn" if stale else True,
+                         "; ".join(stale) + " - check for a newer release" if stale else
+                         f"{len(out)} typed-in series, each within its release cycle"))
+    return out
+
+
 # --------------------------------------------------------------- what changed since last run
 # The page says what moved rather than leaving it to be spotted. State is written each run and
 # read back on the next one, so "changed" means changed, not "looks different to me".
@@ -1473,7 +1587,7 @@ def build_blocks(S, R):
 STATE_FILE = "monitor_state.json"
 
 
-def build_standing(d, R, payload):
+def build_standing(d, R, payload, marks=None, prev_marks=None):
     now = {r["n"]: r.get("st") for rows in R.values() for r in rows if not r.get("na")}
     prev = {}
     p = os.path.join(d, STATE_FILE)
@@ -1506,7 +1620,9 @@ def build_standing(d, R, payload):
                        "nojudge": len([r for r in allrows if r.get("norange")]),
                        "total": len(allrows), "graded": len(graded)})
     with open(p, "w", encoding="utf-8") as f:
-        json.dump({"pulled": payload["generated"], "states": now, "prev": prev}, f)
+        json.dump({"pulled": payload["generated"], "states": now, "prev": prev,
+                   "pulled_prev": PREV_PULL, "releases": marks or {},
+                   "releases_prev": prev_marks}, f)
     fast = []
     for pid, label in (("p-gulf", "The Gulf"), ("p-debt", "Government debt"),
                        ("p-ai", "AI overreach"), ("p-trans", "Transmission")):
@@ -1606,6 +1722,16 @@ def digest_row(r, block):
                        L.get("alab", "a"): _r(L.get("a")), L.get("blab", "b"): _r(L.get("b"))}
     if r.get("short"):
         out["short_history"] = r["short"]
+    if r.get("dem"):
+        dm = r["dem"]
+        out["releases"] = [{"period": o.get("period"), "value": o.get("value"),
+                            "source": o.get("source"), "stated": o.get("stated")}
+                           for o in ([dm["prev"]] if dm["prev"] else []) + [dm["latest"]]]
+        out["change_on_previous_release"] = dm["chg_prev"]
+        out["change_on_year_earlier"] = dm["chg_12m"]
+        out["change_mode"] = "percentage points" if dm["mode"] == "pp" else "percent"
+        if dm["yago"]:
+            out["year_earlier_release"] = {"period": dm["yago"]["period"], "value": dm["yago"]["value"]}
     return out
 
 
@@ -1631,8 +1757,14 @@ def build_digest(d, R, STANDING, CONTEXT, payload):
               "compares with the January-February 2026 average.",
               "Quote figures as the digest holds them (rounding is fine). The build rejects a "
               "reading containing a figure it cannot find among the block's measures or those "
-              "listed under 'uses'."],
+              "listed under 'uses'.",
+              "released_since_last_run lists the major data releases and rate decisions that came "
+              "out since the previous run. The headline must name every one, and the headline or "
+              "a block summary must carry its figure; otherwise the whole reading is held back."],
           "pulled": datetime.fromisoformat(payload["generated"]).date().isoformat(),
+          "generated": payload["generated"],
+          "released_since_last_run": [{k: r[k] for k in ("label", "measure", "period", "value", "was")}
+                                      for r in NEW_RELEASES],
           "changed_state_since_last_run": STANDING.get("moved"),
           "moving_fastest": STANDING.get("fast"),
           "notes_on_file": CONTEXT, "measures": rows}
@@ -1700,6 +1832,274 @@ def _known(tok, x, allowed):
     tol = 0.5 * 10 ** -dec + 1e-9                 # the figure as written must round from the data
     return any(abs(x - v) <= tol for v in allowed)
 
+
+
+# ---------------------------------------------------------- same-day US yields (14 Oct 2026)
+# FRED publishes Treasury yields a day or two late (on 14 October 2026 the newest was 9 October),
+# so the move on a big release day could not show. The CBOE yield indices carry the series
+# forward from FRED's last date, only if the two agree where they overlap.
+SPLICED = []
+
+
+def splice_same_day(S):
+    for key, live, name in (("us_treasury_10y", "us_treasury_10y_live", "US 10-year yield"),
+                            ("us_treasury_30y", "us_treasury_30y_live", "US 30-year yield")):
+        base, lv = S.get(key) or [], S.get(live) or []
+        if not base or not lv:
+            SPLICED.append({"n": name, "ok": "warn", "detail": "same-day quote not pulled; FRED only"})
+            continue
+        b = dict(base)
+        common = [(dd, b[dd], v) for dd, v in lv if dd in b][-15:]
+        if len(common) < 5:
+            SPLICED.append({"n": name, "ok": "warn", "detail": f"only {len(common)} shared days; FRED only"})
+            continue
+        worst = max(abs(x - y) for _, x, y in common)
+        if worst > 0.06:
+            SPLICED.append({"n": name, "ok": "warn",
+                            "detail": f"same-day quote differs from FRED by up to {worst * 100:.0f}bp; FRED only"})
+            continue
+        last_d = base[-1][0]
+        extra = [[dd, v] for dd, v in lv if dd > last_d]
+        S[key] = base + extra
+        SPLICED.append({"n": name, "ok": True,
+                        "detail": (f"FRED to {last_d}, then {len(extra)} same-day CBOE reading(s) to "
+                                   f"{S[key][-1][0]}; on {len(common)} shared days the two differ by at "
+                                   f"most {worst * 100:.1f}bp") if extra else f"FRED is current ({last_d})"})
+
+
+# ---------------------------------------------------------- what came out since the last run
+# Added 14 October 2026, after the reading for that day buried the US CPI release (3.7%, the
+# day's main market event) and named no figure for it. The build now works out from the data
+# which major releases are new since the previous run, lists them in the digest, and holds the
+# reading back unless the headline names each one and the headline or a block summary carries
+# its figure. Policy-rate series count as released when their value changes.
+RELEASES = [
+    {"key": "us_cpi_yoy", "label": "US consumer price inflation", "measure": "US inflation (CPI)",
+     "kind": "obs", "words": ["inflation", "CPI", "consumer prices"], "figure": True},
+    {"key": "uk_cpi", "label": "UK consumer price inflation", "measure": "UK inflation (CPI)",
+     "kind": "obs", "words": ["inflation", "CPI", "consumer prices"], "figure": True},
+    {"key": "us_unemployment", "label": "US jobs report", "measure": "US unemployment rate",
+     "kind": "obs", "words": ["payroll", "jobs", "unemployment", "employment"], "figure": True},
+    {"key": "uk_unemployment", "label": "UK labour market figures", "measure": "UK unemployment rate",
+     "kind": "obs", "words": ["unemployment", "labour market", "jobs", "wages"], "figure": True},
+    {"key": "uk_bank_rate", "label": "Bank of England rate decision", "measure": "Bank Rate",
+     "kind": "value", "words": ["Bank Rate", "Bank of England"], "figure": True},
+    {"key": "us_fed_upper", "label": "Federal Reserve rate decision", "measure": None,
+     "kind": "value", "words": ["Fed", "Federal Reserve", "FOMC"], "figure": False},
+]
+NEW_RELEASES = []
+PREV_PULL = None
+
+
+def release_marks(S):
+    marks = {}
+    for rel in RELEASES:
+        s = S.get(rel["key"]) or []
+        if s:
+            marks[rel["key"]] = s[-1][0] if rel["kind"] == "obs" else s[-1][1]
+    return marks
+
+
+def find_new_releases(d, S, payload):
+    """Compare this pull's release marks with those of the previous run. Returns (marks, prev)."""
+    global PREV_PULL
+    marks, prev, prev_pull = release_marks(S), None, None
+    p = os.path.join(d, STATE_FILE)
+    if os.path.exists(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                saved = json.load(f)
+            same = saved.get("pulled") == payload["generated"]
+            prev = saved.get("releases_prev" if same else "releases")
+            prev_pull = saved.get("pulled_prev") if same else saved.get("pulled")
+        except Exception:
+            prev = None
+    PREV_PULL = prev_pull
+    NEW_RELEASES.clear()
+    for rel in RELEASES:
+        k = rel["key"]
+        if prev is None or k not in prev or k not in marks or prev[k] == marks[k]:
+            continue                       # first run with this check: record, do not demand
+        s = S.get(k)
+        NEW_RELEASES.append({"label": rel["label"], "measure": rel["measure"], "period": s[-1][0],
+                             "value": round(s[-1][1], 2), "words": rel["words"],
+                             "figure": rel["figure"], "was": prev[k]})
+    return marks, prev
+
+
+def _mentions(text, words):
+    t = text or ""
+    for w in words:
+        if re.search(r"(?<![A-Za-z])" + re.escape(w) + r"(?![A-Za-z])", t, re.I if len(w) > 4 else 0):
+            return True
+    return False
+
+
+def _has_figure(text, v):
+    for tok, x in _figures(text or ""):
+        dec = len(tok.split(".")[1]) if "." in tok else 0
+        if dec and abs(x - v) <= 0.5 * 10 ** -dec + 1e-9:
+            return True
+        if not dec and abs(x - v) < 1e-9:
+            return True
+    return False
+
+
+CALENDAR_FILE = "calendar.json"
+
+
+def _when(e):
+    return datetime.fromisoformat(f"{e['date']}T{e.get('time_utc') or '00:00'}:00+00:00")
+
+
+def check_coverage(d, rd, rs, payload):
+    """Reasons the reading does not cover what came out since the last run (empty = covered).
+    Also records the forward calendar from this run's research for the next run to check."""
+    gaps = []
+    head = rd.get("headline") or ""
+    blocks = (rd.get("blocks") or {}).values()
+    summaries = " ".join(b.get("summary") or "" for b in blocks)
+    anywhere = head + " " + " ".join((b.get("summary") or "") + " " + (b.get("reading") or "")
+                                     for b in blocks)
+    for r in NEW_RELEASES:
+        what = f"{r['label']} ({r['period'][:7]}: {r['value']})"
+        if not _mentions(head, r["words"]):
+            gaps.append(f"headline does not mention the {what}")
+        elif r["figure"] and not _has_figure(head + " " + summaries, r["value"]):
+            gaps.append(f"the {what} figure is not in the headline or a block summary")
+    # dated events recorded by earlier runs that fell due since the last run
+    p = os.path.join(d, CALENDAR_FILE)
+    cal = []
+    if os.path.exists(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                cal = json.load(f).get("events") or []
+        except Exception:
+            cal = []
+    now = datetime.fromisoformat(payload["generated"])
+    since = datetime.fromisoformat(PREV_PULL) if PREV_PULL else None
+    due = []
+    for e in cal:
+        try:
+            w = _when(e)
+        except Exception:
+            continue
+        if since and since < w <= now:
+            due.append(e)
+            if not _mentions(anywhere, e.get("words") or [e.get("event", "")]):
+                gaps.append(f"{e['date']} {e.get('event', '?')} fell due and the reading does not address it")
+    # record this run's forward calendar (from the trans-dates research) for the next run
+    fresh = rs.get("calendar")
+    if not isinstance(fresh, list) or not fresh:
+        gaps.append("research.json has no 'calendar' of dated events for the next run to check")
+    else:
+        keep = {(e.get("date"), e.get("event")): e for e in cal
+                if e.get("date", "") >= (now.date() - timedelta(days=7)).isoformat()}
+        for e in fresh:
+            if e.get("date") and e.get("event") and e.get("words"):
+                keep[(e["date"], e["event"])] = {k: e[k] for k in ("date", "time_utc", "event", "words") if k in e}
+            else:
+                gaps.append(f"calendar entry needs date, event and words: {str(e)[:60]}")
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump({"events": sorted(keep.values(), key=lambda e: (e["date"], e.get("time_utc", "")))},
+                      f, indent=1)
+    return gaps, due
+
+
+# ---------------------------------------------------------- known gaps (14 October 2026)
+# Gaps found in audits are kept in known_gaps.json in the repository, and every open one is
+# shown in the checks each day until it is closed by a change, so a finding cannot be written
+# down and forgotten.
+GAPS_FILE = "known_gaps.json"
+
+
+def check_known_gaps(pulled):
+    p = os.path.join(CODE_DIR, GAPS_FILE)
+    if not os.path.exists(p):
+        return ("Known gaps are tracked", False, "known_gaps.json missing from the repository")
+    with open(p, encoding="utf-8") as f:
+        items = json.load(f).get("gaps") or []
+    # a gap counts as closed only once Phil has checked the fix ("approved": date and name)
+    open_ = [g for g in items if g.get("status") != "closed"]
+    waiting = [g for g in items if g.get("status") == "closed" and not g.get("approved")]
+    if not open_ and not waiting:
+        return ("Known gaps are tracked", True, f"all {len(items)} closed and checked")
+    parts = []
+    if open_:
+        oldest = min(open_, key=lambda g: g["found"])
+        age = (pulled - date.fromisoformat(oldest["found"])).days
+        parts.append(f"{len(open_)} of {len(items)} open, oldest {age} days ({oldest['found']}): " +
+                     "; ".join(f"#{g['id']} {g['short']}" for g in open_[:8]) +
+                     (f"; and {len(open_) - 8} more" if len(open_) > 8 else ""))
+    if waiting:
+        parts.append(f"{len(waiting)} fixed but waiting for you to check: " +
+                     "; ".join(f"#{g['id']} {g['short']}" for g in waiting))
+    return ("Known gaps still open", "warn", ". ".join(parts))
+
+
+# ---------------------------------------------------------- independent review (14 Oct 2026)
+# The checks above catch the kinds of miss that can be defined in advance. For the rest, each
+# run has the reading reviewed by a separate agent that did not write it, against the day's
+# research and feeds, asking what important thing it leaves out. review.json records every
+# finding and what was done: "fixed" (the reading was changed), "rejected" (with the reason)
+# or "logged" (needs a change to the page or scripts; kept in review_log.json and shown in the
+# checks every day until a gap is opened for it in known_gaps.json).
+REVIEW_FILE = "review.json"
+REVIEW_LOG = "review_log.json"
+
+
+def check_review(d, pulled):
+    p = os.path.join(d, REVIEW_FILE)
+    if not os.path.exists(p):
+        return ["no review.json - the reading has not been independently reviewed"]
+    try:
+        with open(p, encoding="utf-8") as f:
+            rv = json.load(f)
+    except Exception as e:
+        return [f"review.json unreadable: {e}"]
+    if rv.get("pulled") != pulled:
+        return [f"review is for {rv.get('pulled')}, data pulled {pulled}"]
+    gaps = []
+    if not (rv.get("reviewer") or "").strip():
+        gaps.append("review.json does not say who reviewed it")
+    finds = rv.get("findings")
+    if not isinstance(finds, list):
+        return gaps + ["review.json has no findings list (an empty list means nothing was missed)"]
+    log_p = os.path.join(d, REVIEW_LOG)
+    log = []
+    if os.path.exists(log_p):
+        try:
+            with open(log_p, encoding="utf-8") as f:
+                log = json.load(f).get("findings") or []
+        except Exception:
+            log = []
+    seen = {(x.get("pulled"), x.get("issue")) for x in log}
+    for x in finds:
+        act = x.get("action")
+        if act not in ("fixed", "rejected", "logged") or not (x.get("issue") or "").strip():
+            gaps.append(f"review finding without an outcome: {str(x.get('issue'))[:60]}")
+        elif act == "rejected" and not (x.get("reason") or "").strip():
+            gaps.append(f"review finding rejected without a reason: {x['issue'][:60]}")
+        elif act == "logged" and (pulled, x["issue"]) not in seen:
+            log.append({"pulled": pulled, "issue": x["issue"], "reason": x.get("reason", "")})
+    with open(log_p, "w", encoding="utf-8") as f:
+        json.dump({"findings": log}, f, indent=1)
+    return gaps
+
+
+def review_log_note(d):
+    p = os.path.join(d, REVIEW_LOG)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            log = [x for x in json.load(f).get("findings") or [] if not x.get("gap")]
+    except Exception:
+        return None
+    if not log:
+        return None
+    return ("Reviewer findings waiting for a fix", "warn",
+            f"{len(log)}: " + "; ".join(f"{x['pulled']} {x['issue'][:80]}" for x in log[-6:]))
 
 # ---------------------------------------------------------- research end point (added 9 Oct 2026)
 # The reading is only shown if the research behind it reached a defined end point, checked here
@@ -1813,6 +2213,19 @@ def build_readings(d, dg):
     checks.append(("Research reached its end point", True,
                    f"all {len(STANDING_QUESTIONS)} standing questions sourced, no open leads, "
                    "every risk searched to saturation" + (f"; note: {feed_note}" if feed_note else "")))
+    with open(os.path.join(d, RESEARCH_FILE), encoding="utf-8") as f:
+        rs = json.load(f)
+    cov, due = check_coverage(d, rd, rs, {"generated": dg["generated"]})
+    cov += check_review(d, dg["pulled"])
+    if cov:
+        checks.append(("The reading covers what came out since the last run", "warn",
+                       f"{len(cov)} gap(s): " + "; ".join(cov[:6]) + " - whole reading held back"))
+        return None, checks
+    checks.append(("The reading covers what came out since the last run", True,
+                   (f"{len(NEW_RELEASES)} new release(s) named with figures: " +
+                    ", ".join(f"{r['label']} {r['value']}" for r in NEW_RELEASES)
+                    if NEW_RELEASES else "no major data release since the last run") +
+                   (f"; {len(due)} dated event(s) due and addressed" if due else "")))
     allowed_all = set().union(*(_allowed(dg, k, [m["n"] for m in dg["measures"]
                                                  if m.get("block_key") == "detail"])
                                 for k in BLOCK_KEYS))
@@ -1877,9 +2290,20 @@ MAX_AGE = {  # days between the pull and the latest reading
     "Market breadth": 5, "Sterling against the dollar": 5,
     "p-gulf": 7, "p-debt": 7, "p-ai": 7, "p-trans": 7,
     "p-fold-detail": 7, "p-fold-market": 7,
-    "US term premium": 21, "UK unemployment rate": 130, "UK employment rate": 130,
-    "UK vacancies": 100, "US unemployment rate": 60, "US Sahm recession gauge": 60,
+    # ONS dates each three-month window by its middle month (May-July shows as June) and
+    # publishes roughly monthly; the gap between releases is sometimes five weeks (15 September
+    # to 20 October 2026), when the newest reading reaches about 140 days. Raised 10 October
+    # 2026 from 130 and 100, which failed in the week before a release.
+    "US term premium": 21, "UK unemployment rate": 145, "UK employment rate": 145,
+    "UK vacancies": 115, "US unemployment rate": 60, "US Sahm recession gauge": 60,
     "US initial jobless claims": 14,
+    # Ramp AI Index: monthly, dated the first of the month, published about five to six weeks
+    # after the month ends, so the newest reading is normally 40 to 75 days old
+    "Businesses paying for AI": 80, "Businesses paying Anthropic": 80, "Businesses paying OpenAI": 80,
+    # CPI: monthly, dated the first of the month (FRED) or the month (ONS), published about two
+    # weeks (US) or three weeks (UK) after the month ends, so the newest is up to 80-85 days old
+    "US inflation (CPI)": 80, "US core inflation": 80, "UK inflation (CPI)": 85,
+    "UK services inflation": 85,
 }
 
 
@@ -2048,7 +2472,7 @@ def run_checks(payload, R, FUNDS, SCHED, sched_checks):
         "; ".join(bad_legs) if bad_legs else
         f"{len(legged)} spreads checked: " + ", ".join(legged))
 
-    ctx = build_context(os.path.dirname(os.path.abspath(__file__)))
+    ctx = build_context(DATA_DIR)
     newest = max((c.get("date", "") for c in ctx), default="")
     cage = (pulled - _d(newest)).days if newest else None
     add("Context notes are present and recent", bool(ctx) and cage is not None and cage <= 14,
@@ -2070,6 +2494,8 @@ def run_checks(payload, R, FUNDS, SCHED, sched_checks):
 # --------------------------------------------------------------- page
 
 TEMPLATE = "dashboard_template4.html"
+CODE_DIR = os.path.dirname(os.path.abspath(__file__))   # scripts and template (the repository)
+DATA_DIR = CODE_DIR                                     # history and state; set from argv in main()
 
 
 def fill_manual(html, generated):
@@ -2111,9 +2537,13 @@ def render(R, FUNDS, SCHED, CHECKS, payload, template_path):
 
 
 def main():
-    d = sys.argv[1] if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
+    global DATA_DIR
+    d = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else CODE_DIR
+    DATA_DIR = d
     with open(os.path.join(d, "monitor_data.json"), encoding="utf-8") as f:
         payload = json.load(f)
+    splice_same_day(payload["series"])
+    marks, prev_marks = find_new_releases(d, payload["series"], payload)
     R = build_rows(payload["series"])
     brief = build_brief(payload["series"], R)
     global HELD_BACK, SPLIT
@@ -2122,15 +2552,28 @@ def main():
     WARN = build_warn(payload["series"])
     R = {"p-brief": brief, **R}
     R = build_blocks(payload["series"], R)
+    _pulled = datetime.fromisoformat(payload["generated"]).date()
+    _drows = demand_rows(d, _pulled)
+    _ai = R.get("p-ai", [])
+    _at = max([i for i, r in enumerate(_ai) if r.get("demand")], default=len(_ai) - 1) + 1
+    R["p-ai"] = _ai[:_at] + _drows + _ai[_at:]
     FUNDS = build_funds(payload["series"].get("funds"))
     SCHED, sched_checks = build_schedule(d)
-    STANDING = build_standing(d, R, payload)
+    STANDING = build_standing(d, R, payload, marks, prev_marks)
     CONTEXT = build_context(d)
     DIGEST = build_digest(d, R, STANDING, CONTEXT, payload)
     READINGS, rd_checks = build_readings(d, DIGEST)
     CHECKS = run_checks(payload, R, FUNDS, SCHED, sched_checks)
     CHECKS += [{"name": n, "ok": ok, "detail": det} for n, ok, det in rd_checks]
-    html = render(R, FUNDS, SCHED, CHECKS, payload, os.path.join(d, TEMPLATE))
+    CHECKS += [{"name": n, "ok": ok, "detail": det} for n, ok, det in DEMAND_NOTES]
+    CHECKS += [{"name": f"{x['n']} carried to the same day", "ok": x["ok"], "detail": x["detail"]}
+               for x in SPLICED]
+    n_, ok_, det_ = check_known_gaps(datetime.fromisoformat(payload["generated"]).date())
+    CHECKS.append({"name": n_, "ok": ok_, "detail": det_})
+    rl = review_log_note(d)
+    if rl:
+        CHECKS.append({"name": rl[0], "ok": rl[1], "detail": rl[2]})
+    html = render(R, FUNDS, SCHED, CHECKS, payload, os.path.join(CODE_DIR, TEMPLATE))
     html = html.replace("const SPLIT = null;", "const SPLIT = " + json.dumps(SPLIT, separators=(",", ":")) + ";", 1)
     html = html.replace("const WARN = null;", "const WARN = " + json.dumps(WARN, separators=(",", ":")) + ";", 1)
     html = html.replace("const STANDING = null;", "const STANDING = " + json.dumps(STANDING, separators=(",", ":")) + ";", 1)
