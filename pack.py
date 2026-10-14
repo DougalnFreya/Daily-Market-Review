@@ -33,3 +33,20 @@ files["engine_files.json"] = "engine_files.json"
 manifest = {"saved": datetime.date.today().isoformat(), "files": dict(sorted(files.items()))}
 json.dump(manifest, open(os.path.join(DATA, "engine_files.json"), "w"), indent=1)
 print("listed", len(files), "files:", ", ".join(sorted(files)))
+
+# The engine artifact's page itself: a short note saying what the files are (added 14 October
+# 2026; the daily run had been failing to find it).
+with open(os.path.join(DATA, "engine_index.html"), "w", encoding="utf-8") as f:
+    f.write(f"""<title>Monitor engine files</title>
+<style>
+:root{{--bg:#fbfaf7;--fg:#1d1d1b;--muted:#6b6a64}}
+@media (prefers-color-scheme: dark){{:root:not([data-theme="light"]){{--bg:#1b1b19;--fg:#ecebe6;--muted:#a3a29b}}}}
+:root[data-theme="dark"]{{--bg:#1b1b19;--fg:#ecebe6;--muted:#a3a29b}}
+body{{background:var(--bg);color:var(--fg);font:16px/1.5 system-ui,sans-serif;margin:0;padding:24px 16px;max-width:680px}}
+p{{color:var(--muted)}}
+</style>
+<h1>Monitor engine files</h1>
+<p>Data for the daily monitor run: the history and state the monitor carries from one day to the next (CSV and JSON files), listed in engine_files.json. There is no code here; the scripts live in Phil's GitHub repository. Nothing here needs looking at.</p>
+<p>Last saved {datetime.date.today():%d %B %Y}.</p>
+""")
+print("wrote engine_index.html")
