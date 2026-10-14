@@ -15,7 +15,7 @@ import datetime, json, os, sys
 DATA = os.path.abspath(sys.argv[1]) if len(sys.argv) > 1 else os.path.dirname(os.path.abspath(__file__))
 SKIP_NAMES = {"monitor_data.json", "monitor_latest.csv", "dashboard.html", "run_summary.txt",
               "monitor_checks.txt", "engine_bundle.txt", "engine_files.json", "runall.out",
-              "digest.json", "readings.json", "research.json", "dashboard_template4.html",
+              "digest.json", "readings.json", "research.json", "review.json", "dashboard_template4.html",
               "engine_index.html"}
 # Only types the artifact will serve. ETF schedule.xlsx is not one of them: run_all.py rebuilds it
 # each run from momentum/prices.csv and unemployment.csv, which are saved.

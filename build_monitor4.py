@@ -2019,15 +2019,87 @@ def check_known_gaps(pulled):
         return ("Known gaps are tracked", False, "known_gaps.json missing from the repository")
     with open(p, encoding="utf-8") as f:
         items = json.load(f).get("gaps") or []
+    # a gap counts as closed only once Phil has checked the fix ("approved": date and name)
     open_ = [g for g in items if g.get("status") != "closed"]
-    if not open_:
-        return ("Known gaps are tracked", True, f"all {len(items)} closed")
-    oldest = min(open_, key=lambda g: g["found"])
-    age = (pulled - date.fromisoformat(oldest["found"])).days
-    return ("Known gaps still open", "warn",
-            f"{len(open_)} of {len(items)} open, oldest {age} days ({oldest['found']}): " +
-            "; ".join(f"#{g['id']} {g['short']}" for g in open_[:8]) +
-            (f"; and {len(open_) - 8} more" if len(open_) > 8 else ""))
+    waiting = [g for g in items if g.get("status") == "closed" and not g.get("approved")]
+    if not open_ and not waiting:
+        return ("Known gaps are tracked", True, f"all {len(items)} closed and checked")
+    parts = []
+    if open_:
+        oldest = min(open_, key=lambda g: g["found"])
+        age = (pulled - date.fromisoformat(oldest["found"])).days
+        parts.append(f"{len(open_)} of {len(items)} open, oldest {age} days ({oldest['found']}): " +
+                     "; ".join(f"#{g['id']} {g['short']}" for g in open_[:8]) +
+                     (f"; and {len(open_) - 8} more" if len(open_) > 8 else ""))
+    if waiting:
+        parts.append(f"{len(waiting)} fixed but waiting for you to check: " +
+                     "; ".join(f"#{g['id']} {g['short']}" for g in waiting))
+    return ("Known gaps still open", "warn", ". ".join(parts))
+
+
+# ---------------------------------------------------------- independent review (14 Oct 2026)
+# The checks above catch the kinds of miss that can be defined in advance. For the rest, each
+# run has the reading reviewed by a separate agent that did not write it, against the day's
+# research and feeds, asking what important thing it leaves out. review.json records every
+# finding and what was done: "fixed" (the reading was changed), "rejected" (with the reason)
+# or "logged" (needs a change to the page or scripts; kept in review_log.json and shown in the
+# checks every day until a gap is opened for it in known_gaps.json).
+REVIEW_FILE = "review.json"
+REVIEW_LOG = "review_log.json"
+
+
+def check_review(d, pulled):
+    p = os.path.join(d, REVIEW_FILE)
+    if not os.path.exists(p):
+        return ["no review.json - the reading has not been independently reviewed"]
+    try:
+        with open(p, encoding="utf-8") as f:
+            rv = json.load(f)
+    except Exception as e:
+        return [f"review.json unreadable: {e}"]
+    if rv.get("pulled") != pulled:
+        return [f"review is for {rv.get('pulled')}, data pulled {pulled}"]
+    gaps = []
+    if not (rv.get("reviewer") or "").strip():
+        gaps.append("review.json does not say who reviewed it")
+    finds = rv.get("findings")
+    if not isinstance(finds, list):
+        return gaps + ["review.json has no findings list (an empty list means nothing was missed)"]
+    log_p = os.path.join(d, REVIEW_LOG)
+    log = []
+    if os.path.exists(log_p):
+        try:
+            with open(log_p, encoding="utf-8") as f:
+                log = json.load(f).get("findings") or []
+        except Exception:
+            log = []
+    seen = {(x.get("pulled"), x.get("issue")) for x in log}
+    for x in finds:
+        act = x.get("action")
+        if act not in ("fixed", "rejected", "logged") or not (x.get("issue") or "").strip():
+            gaps.append(f"review finding without an outcome: {str(x.get('issue'))[:60]}")
+        elif act == "rejected" and not (x.get("reason") or "").strip():
+            gaps.append(f"review finding rejected without a reason: {x['issue'][:60]}")
+        elif act == "logged" and (pulled, x["issue"]) not in seen:
+            log.append({"pulled": pulled, "issue": x["issue"], "reason": x.get("reason", "")})
+    with open(log_p, "w", encoding="utf-8") as f:
+        json.dump({"findings": log}, f, indent=1)
+    return gaps
+
+
+def review_log_note(d):
+    p = os.path.join(d, REVIEW_LOG)
+    if not os.path.exists(p):
+        return None
+    try:
+        with open(p, encoding="utf-8") as f:
+            log = [x for x in json.load(f).get("findings") or [] if not x.get("gap")]
+    except Exception:
+        return None
+    if not log:
+        return None
+    return ("Reviewer findings waiting for a fix", "warn",
+            f"{len(log)}: " + "; ".join(f"{x['pulled']} {x['issue'][:80]}" for x in log[-6:]))
 
 # ---------------------------------------------------------- research end point (added 9 Oct 2026)
 # The reading is only shown if the research behind it reached a defined end point, checked here
@@ -2144,6 +2216,7 @@ def build_readings(d, dg):
     with open(os.path.join(d, RESEARCH_FILE), encoding="utf-8") as f:
         rs = json.load(f)
     cov, due = check_coverage(d, rd, rs, {"generated": dg["generated"]})
+    cov += check_review(d, dg["pulled"])
     if cov:
         checks.append(("The reading covers what came out since the last run", "warn",
                        f"{len(cov)} gap(s): " + "; ".join(cov[:6]) + " - whole reading held back"))
@@ -2497,6 +2570,9 @@ def main():
                for x in SPLICED]
     n_, ok_, det_ = check_known_gaps(datetime.fromisoformat(payload["generated"]).date())
     CHECKS.append({"name": n_, "ok": ok_, "detail": det_})
+    rl = review_log_note(d)
+    if rl:
+        CHECKS.append({"name": rl[0], "ok": rl[1], "detail": rl[2]})
     html = render(R, FUNDS, SCHED, CHECKS, payload, os.path.join(CODE_DIR, TEMPLATE))
     html = html.replace("const SPLIT = null;", "const SPLIT = " + json.dumps(SPLIT, separators=(",", ":")) + ";", 1)
     html = html.replace("const WARN = null;", "const WARN = " + json.dumps(WARN, separators=(",", ":")) + ";", 1)
